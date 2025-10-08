@@ -1,0 +1,13 @@
+config.json
+*.db
+*.pdf
+*.txt
+*.md
+*.sqlite
+*.sqlite3
+__pycache__/
+*.pyc
+.env
+node_modules/
+.vscode/
+linkedin_n8n_scraper.json
