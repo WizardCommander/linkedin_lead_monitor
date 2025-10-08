@@ -2,6 +2,7 @@ import json
 import re
 import time
 import os
+import logging
 import requests
 from typing import List, Dict, Optional
 from playwright.sync_api import sync_playwright, Page
@@ -11,11 +12,17 @@ from utils import extract_budget_mention
 
 load_dotenv()
 
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 # Constants
 MAX_KEYWORDS_IN_QUERY = 15
 MAX_JOB_TITLES_IN_QUERY = 7
 MAX_INDUSTRIES_IN_QUERY = 7
 SCRAPE_DELAY_SECONDS = 2
+MIN_POST_CONTENT_LENGTH = 50
+SKIP_FIRST_N_LINES = 2
 
 class ConfigurationError(Exception):
     """Raised when configuration is missing or invalid"""
@@ -163,7 +170,8 @@ def scrape_linkedin_post(page: Page, url: str) -> Dict:
                     content = elem.inner_text().strip()
                     if content:
                         break
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Selector '{selector}' failed: {e}")
                     continue
 
             # Fallback: get text from article but clean it
@@ -184,34 +192,39 @@ def scrape_linkedin_post(page: Page, url: str) -> Dict:
 
                 # The main post content usually starts after author title
                 for i, line in enumerate(content_lines):
-                    if i > 2 and len(line) > 50:  # Likely the post content
+                    if i > SKIP_FIRST_N_LINES and len(line) > MIN_POST_CONTENT_LENGTH:
                         content = '\n'.join(content_lines[i:])
                         break
 
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Fallback content extraction failed: {e}")
             content = ""
 
         # Extract author name and title
         try:
             author_name_elem = page.locator(".update-components-actor__name, .feed-shared-actor__name").first
             author_name = author_name_elem.inner_text().strip()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Primary author name extraction failed: {e}")
             try:
                 author_name = page.locator("a[href*='/in/']").first.inner_text().strip()
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Fallback author name extraction failed: {e}")
                 pass
 
         try:
             author_title_elem = page.locator(".update-components-actor__description, .feed-shared-actor__description").first
             author_title = author_title_elem.inner_text().strip()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Author title extraction failed: {e}")
             pass
 
         hashtags = []
         try:
             hashtag_elements = page.locator("a[href*='/hashtag/']").all()
             hashtags = [el.inner_text().strip() for el in hashtag_elements]
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Hashtag extraction failed: {e}")
             pass
 
         content = content.strip() if content else ""

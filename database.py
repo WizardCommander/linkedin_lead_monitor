@@ -236,7 +236,8 @@ def dismiss_lead(lead_id: int) -> bool:
                 WHERE id = ?
             """, (lead_id,))
             return cursor.rowcount > 0
-    except Exception:
+    except sqlite3.Error as e:
+        print(f"Error dismissing lead {lead_id}: {e}")
         return False
 
 def get_leads_today_count() -> int:

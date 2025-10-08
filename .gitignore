@@ -11,3 +11,12 @@ __pycache__/
 node_modules/
 .vscode/
 linkedin_n8n_scraper.json
+
+# Test files and test databases
+test_*.py
+test_*.db
+*_test.py
+pytest_cache/
+.pytest_cache/
+.coverage
+htmlcov/
