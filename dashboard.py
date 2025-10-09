@@ -1,24 +1,21 @@
 import streamlit as st
 import json
+import html
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import List, Dict
+from typing import List, Dict, Any
 from database import (
     init_database,
     get_leads_filtered,
     get_lead_count,
     get_leads_today_count,
-    dismiss_lead
+    dismiss_lead,
 )
 from monitor import ScraperMonitor
 
 # Page config
-st.set_page_config(
-    page_title="PR Lead Bot Dashboard",
-    page_icon="🤖",
-    layout="wide"
-)
+st.set_page_config(page_title="PR Lead Bot Dashboard", page_icon="🤖", layout="wide")
 
 # Initialize
 if "monitor" not in st.session_state:
@@ -28,35 +25,115 @@ if "monitor" not in st.session_state:
 monitor = st.session_state.monitor
 
 # Custom CSS
-st.markdown("""
+st.markdown(
+    """
 <style>
+    /* Hide Streamlit UI elements */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Lead card styling - containerized with blue left border */
     .lead-card {
-        border: 1px solid #e0e0e0;
+        background-color: transparent;
         border-radius: 8px;
-        padding: 16px;
-        margin-bottom: 16px;
-        background-color: #f9f9f9;
+        padding: 20px;
+        margin-bottom: 24px;
+        border: 2px solid #3b82f6;
+        border-left: 6px solid #3b82f6;
+        transition: all 0.2s ease;
     }
+
+    .lead-card:hover {
+        border-color: #2563eb;
+        border-left-color: #2563eb;
+        transform: translateX(4px);
+    }
+
     .lead-header {
-        font-weight: bold;
-        margin-bottom: 8px;
+        font-weight: 600;
+        font-size: 1.15em;
+        margin-bottom: 6px;
+        color: #ffffff;
     }
+
     .lead-meta {
-        color: #666;
+        color: #a0aec0;
         font-size: 0.9em;
-        margin-bottom: 8px;
+        margin-bottom: 12px;
     }
+
+    .lead-content {
+        color: #e2e8f0;
+        line-height: 1.6;
+        margin-bottom: 12px;
+    }
+
+    /* Filter pill styling with distinct colors */
     .matched-pill {
         display: inline-block;
-        background-color: #e3f2fd;
-        padding: 4px 8px;
-        border-radius: 4px;
-        margin-right: 4px;
-        margin-bottom: 4px;
-        font-size: 0.8em;
+        padding: 6px 12px;
+        border-radius: 16px;
+        margin-right: 6px;
+        margin-bottom: 6px;
+        font-size: 0.85em;
+        font-weight: 500;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+
+    .pill-keyword {
+        background-color: #ff9800;
+        color: #ffffff;
+    }
+
+    .pill-role {
+        background-color: #9c27b0;
+        color: #ffffff;
+    }
+
+    .pill-category {
+        background-color: #00897b;
+        color: #ffffff;
+    }
+
+    /* Section headers */
+    .section-header {
+        background: linear-gradient(90deg, #f5f5f5 0%, #ffffff 100%);
+        padding: 12px 16px;
+        border-radius: 6px;
+        margin-bottom: 16px;
+        border-left: 3px solid #1976d2;
+    }
+
+    /* Button styling */
+    .stButton > button[kind="primary"] {
+        background-color: #1976d2;
+        color: white;
+        border: none;
+    }
+
+    .stButton > button[kind="secondary"] {
+        background-color: transparent;
+        color: #d32f2f;
+        border: 1px solid #d32f2f;
+    }
+
+    /* Improve spacing */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+
+    /* Timestamp styling */
+    .timestamp {
+        color: #9e9e9e;
+        font-size: 0.85em;
+        font-style: italic;
     }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # Title
 st.title("🤖 PR Lead Bot Dashboard")
@@ -65,14 +142,19 @@ st.markdown("Monitor X, BlueSky & Reddit for CPG clients seeking PR agencies")
 # Configuration Panel (Sidebar)
 st.sidebar.header("⚙️ Bot Configuration")
 
+
 # Load config
-def load_config():
+def load_config() -> Dict[str, Any]:
+    """Load configuration from config.json"""
     with open("config.json", "r") as f:
         return json.load(f)
 
-def save_config(config):
+
+def save_config(config: Dict[str, Any]) -> None:
+    """Save configuration to config.json"""
     with open("config.json", "w") as f:
         json.dump(config, f, indent=2)
+
 
 config = load_config()
 
@@ -193,34 +275,24 @@ col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     filter_category = st.selectbox(
-        "Filter by category",
-        ["All"] + cpg_categories,
-        key="filter_category"
+        "Filter by category", ["All"] + cpg_categories, key="filter_category"
     )
 
 with col2:
     filter_role = st.selectbox(
-        "Filter by role",
-        ["All"] + role_keywords,
-        key="filter_role"
+        "Filter by role", ["All"] + role_keywords, key="filter_role"
     )
 
 with col3:
     filter_keyword = st.selectbox(
-        "Filter by keyword",
-        ["All"] + pr_keywords,
-        key="filter_keyword"
+        "Filter by keyword", ["All"] + pr_keywords, key="filter_keyword"
     )
 
 with col4:
     search_text = st.text_input("🔍 Search posts", key="search_text")
 
 # Get filtered leads
-filter_params = {
-    "platform": "linkedin",
-    "include_dismissed": False,
-    "limit": 50
-}
+filter_params = {"platform": "linkedin", "include_dismissed": False, "limit": 50}
 
 if filter_category and filter_category != "All":
     filter_params["category"] = filter_category
@@ -244,57 +316,91 @@ else:
 
     for lead in leads:
         # Parse matched filters
-        matched_keywords = json.loads(lead.get("matched_keywords", "[]"))
-        matched_roles = json.loads(lead.get("matched_roles", "[]"))
-        matched_categories = json.loads(lead.get("matched_categories", "[]"))
+        matched_keywords = json.loads(lead.get("matched_keywords") or "[]")
+        matched_roles = json.loads(lead.get("matched_roles") or "[]")
+        matched_categories = json.loads(lead.get("matched_categories") or "[]")
 
-        # Create card
+        # Create card with custom styling
         with st.container():
+            # Build entire lead card as HTML
+            author_name = html.escape(lead.get("author_name") or "Unknown")
+            author_title_raw = lead.get("author_title") or ""
+            author_title = html.escape(author_title_raw.strip())
+
+            if author_title:
+                author_display = f'<div class="lead-header">{author_name}</div><div class="lead-meta">{author_title}</div>'
+            else:
+                author_display = f'<div class="lead-header">{author_name}</div><div class="lead-meta">No title available</div>'
+
+            # Post content preview (HTML escaped for XSS protection)
+            content = lead.get("post_content") or ""
+            preview = content[:300] + "..." if len(content) > 300 else content
+            preview_escaped = html.escape(preview)
+
+            # Matched filters with vibrant pills (HTML escaped for XSS protection)
+            matches_html = ""
+            if matched_keywords or matched_roles or matched_categories:
+                matches_html = "<div style='margin-top: 12px;'>"
+                for kw in matched_keywords:
+                    kw_escaped = html.escape(str(kw))
+                    matches_html += f'<span class="matched-pill pill-keyword">🔍 {kw_escaped}</span>'
+                for role in matched_roles:
+                    role_escaped = html.escape(str(role))
+                    matches_html += (
+                        f'<span class="matched-pill pill-role">👔 {role_escaped}</span>'
+                    )
+                for cat in matched_categories:
+                    cat_escaped = html.escape(str(cat))
+                    matches_html += f'<span class="matched-pill pill-category">🏭 {cat_escaped}</span>'
+                matches_html += "</div>"
+
+            # Timestamp
+            timestamp_html = ""
+            scraped_at = lead.get("scraped_at", "")
+            if scraped_at:
+                try:
+                    dt = datetime.fromisoformat(scraped_at)
+                    time_ago = datetime.now() - dt
+                    if time_ago.days > 0:
+                        time_str = f"{time_ago.days}d ago"
+                    elif time_ago.seconds // 3600 > 0:
+                        time_str = f"{time_ago.seconds // 3600}h ago"
+                    else:
+                        time_str = f"{time_ago.seconds // 60}m ago"
+                    timestamp_html = f'<div class="timestamp">Posted {time_str}</div>'
+                except Exception:
+                    timestamp_html = (
+                        f'<div class="timestamp">Posted at {scraped_at}</div>'
+                    )
+
+            # Render as two columns with lead card only wrapping left content
             col1, col2 = st.columns([5, 1])
 
             with col1:
-                st.markdown(f"**{lead.get('author_name', 'Unknown')}** | {lead.get('author_title', 'No title')}")
-
-                # Post content preview
-                content = lead.get('post_content', '')
-                preview = content[:300] + "..." if len(content) > 300 else content
-                st.write(preview)
-
-                # Matched filters
-                if matched_keywords or matched_roles or matched_categories:
-                    matches_html = "<div style='margin-top: 8px;'>"
-                    for kw in matched_keywords:
-                        matches_html += f'<span class="matched-pill">🔍 {kw}</span>'
-                    for role in matched_roles:
-                        matches_html += f'<span class="matched-pill">👔 {role}</span>'
-                    for cat in matched_categories:
-                        matches_html += f'<span class="matched-pill">🏭 {cat}</span>'
-                    matches_html += "</div>"
-                    st.markdown(matches_html, unsafe_allow_html=True)
-
-                # Timestamp
-                scraped_at = lead.get('scraped_at', '')
-                if scraped_at:
-                    try:
-                        dt = datetime.fromisoformat(scraped_at)
-                        time_ago = datetime.now() - dt
-                        if time_ago.days > 0:
-                            time_str = f"{time_ago.days}d ago"
-                        elif time_ago.seconds // 3600 > 0:
-                            time_str = f"{time_ago.seconds // 3600}h ago"
-                        else:
-                            time_str = f"{time_ago.seconds // 60}m ago"
-                        st.caption(f"Posted {time_str}")
-                    except Exception:
-                        st.caption(f"Posted at {scraped_at}")
+                full_card_html = f"""
+                <div class="lead-card">
+                    {author_display}
+                    <div class="lead-content">{preview_escaped}</div>
+                    {matches_html}
+                    {timestamp_html}
+                </div>
+                """
+                st.markdown(full_card_html, unsafe_allow_html=True)
 
             with col2:
-                # Actions
-                if st.button("👁️ Preview", key=f"preview_{lead['id']}", use_container_width=True):
+                # Actions with improved styling
+                if st.button(
+                    "👁️ Preview",
+                    key=f"preview_{lead['id']}",
+                    type="primary",
+                    use_container_width=True,
+                ):
                     st.write(f"[Open LinkedIn Post]({lead.get('post_url', '#')})")
 
-                if st.button("🗑️ Dismiss", key=f"dismiss_{lead['id']}", use_container_width=True):
-                    dismiss_lead(lead['id'])
+                if st.button(
+                    "🗑️ Dismiss", key=f"dismiss_{lead['id']}", use_container_width=True
+                ):
+                    dismiss_lead(lead["id"])
                     st.rerun()
 
             st.divider()
