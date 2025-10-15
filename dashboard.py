@@ -1,8 +1,10 @@
 import streamlit as st
 import json
 import html
+import re
 import threading
 import time
+import schedule
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from database import (
@@ -14,6 +16,10 @@ from database import (
 )
 from monitor import ScraperMonitor
 
+# Global flag for thread control (not in session_state - threads can't access it)
+_scheduler_running = False
+_scheduler_lock = threading.Lock()
+
 # Page config
 st.set_page_config(page_title="PR Lead Bot Dashboard", page_icon="🤖", layout="wide")
 
@@ -21,8 +27,73 @@ st.set_page_config(page_title="PR Lead Bot Dashboard", page_icon="🤖", layout=
 if "monitor" not in st.session_state:
     init_database()
     st.session_state.monitor = ScraperMonitor()
+    st.session_state.scheduler_thread = None
 
 monitor = st.session_state.monitor
+
+
+def run_scheduler_loop():
+    """Background thread that runs the scheduler"""
+    global _scheduler_running
+    while True:
+        with _scheduler_lock:
+            if not _scheduler_running:
+                break
+        schedule.run_pending()
+        time.sleep(60)  # Check every minute
+
+
+def start_background_scheduler(monitor_instance, interval_hours):
+    """Start the scheduler in a background thread"""
+    global _scheduler_running
+
+    with _scheduler_lock:
+        if _scheduler_running:
+            return  # Already running
+
+        # Clear any existing scheduled jobs
+        schedule.clear()
+
+        # Schedule the job
+        schedule.every(interval_hours).hours.do(monitor_instance.run_scraper_job)
+
+        # Calculate initial next run time
+        monitor_instance.next_run_time = time.time() + (interval_hours * 3600)
+
+        # Start background thread
+        _scheduler_running = True
+
+    st.session_state.scheduler_thread = threading.Thread(
+        target=run_scheduler_loop, daemon=True
+    )
+    st.session_state.scheduler_thread.start()
+
+
+def stop_background_scheduler():
+    """Stop the background scheduler"""
+    global _scheduler_running
+
+    with _scheduler_lock:
+        _scheduler_running = False
+
+    schedule.clear()
+    st.session_state.scheduler_thread = None
+
+
+def is_scheduler_running():
+    """Check if scheduler is currently running"""
+    global _scheduler_running
+    with _scheduler_lock:
+        return _scheduler_running
+
+
+# Auto-start scheduler if monitoring was previously enabled
+if "scheduler_initialized" not in st.session_state:
+    st.session_state.scheduler_initialized = True
+    config = monitor.load_config()
+    if config.get("monitoring", {}).get("active", False) and not is_scheduler_running():
+        interval_hours = config.get("monitoring", {}).get("interval_hours", 1)
+        start_background_scheduler(monitor, interval_hours)
 
 # Custom CSS
 st.markdown(
@@ -123,13 +194,6 @@ st.markdown(
         padding-top: 2rem;
         padding-bottom: 2rem;
     }
-
-    /* Timestamp styling */
-    .timestamp {
-        color: #9e9e9e;
-        font-size: 0.85em;
-        font-style: italic;
-    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -137,7 +201,6 @@ st.markdown(
 
 # Title
 st.title("🤖 PR Lead Bot Dashboard")
-st.markdown("Monitor X, BlueSky & Reddit for CPG clients seeking PR agencies")
 
 # Configuration Panel (Sidebar)
 st.sidebar.header("⚙️ Bot Configuration")
@@ -242,20 +305,42 @@ with col4:
     status_text = "🟢 Active" if status["active"] else "⚫ Stopped"
     st.metric("Status", status_text)
 
+# Next run display
+if status["active"] and status.get("next_run_time"):
+    next_run = status["next_run_time"]
+    time_until = next_run - time.time()
+    if time_until > 0:
+        minutes_until = int(time_until // 60)
+        if minutes_until >= 60:
+            hours_until = minutes_until // 60
+            mins_remaining = minutes_until % 60
+            next_run_str = f"⏰ Next scrape in {hours_until}h {mins_remaining}m"
+        else:
+            next_run_str = f"⏰ Next scrape in {minutes_until}m"
+        st.info(next_run_str)
+    else:
+        st.info("⏰ Scrape starting soon...")
+elif status["active"]:
+    st.info("⏰ Waiting for first scheduled run...")
+
 # Control buttons
 col1, col2, col3 = st.columns(3)
 
 with col1:
     if st.button("▶️ Start Monitoring", type="primary", use_container_width=True):
         monitor.start_monitoring()
-        st.success("Monitoring started!")
+        config = monitor.load_config()
+        interval_hours = config.get("monitoring", {}).get("interval_hours", 1)
+        start_background_scheduler(monitor, interval_hours)
+        st.toast("✅ Monitoring started!", icon="✅")
         time.sleep(1)
         st.rerun()
 
 with col2:
     if st.button("⏸️ Stop Monitoring", use_container_width=True):
         monitor.stop_monitoring()
-        st.warning("Monitoring stopped")
+        stop_background_scheduler()
+        st.toast("⏸️ Monitoring stopped", icon="⚠️")
         time.sleep(1)
         st.rerun()
 
@@ -263,7 +348,7 @@ with col3:
     if st.button("🔄 Run Once", use_container_width=True):
         with st.spinner("Running scraper..."):
             monitor.run_once()
-        st.success("Scrape completed!")
+        st.toast("✅ Scrape completed!", icon="✅")
         time.sleep(2)
         st.rerun()
 
@@ -332,10 +417,36 @@ else:
             else:
                 author_display = f'<div class="lead-header">{author_name}</div><div class="lead-meta">No title available</div>'
 
-            # Post content preview (HTML escaped for XSS protection)
+            # Post content preview
             content = lead.get("post_content") or ""
-            preview = content[:300] + "..." if len(content) > 300 else content
-            preview_escaped = html.escape(preview)
+            # Strip any HTML tags first
+            content_clean = re.sub(r"<[^>]+>", "", content).strip()
+            preview_text = (
+                content_clean[:300] + "..."
+                if len(content_clean) > 300
+                else content_clean
+            )
+
+            # Timestamp - calculate time ago
+            time_str = ""
+            scraped_at = lead.get("scraped_at", "")
+            if scraped_at:
+                try:
+                    dt = datetime.fromisoformat(scraped_at)
+                    time_ago = datetime.now() - dt
+                    if time_ago.days > 0:
+                        time_str = f"{time_ago.days}d ago"
+                    elif time_ago.seconds // 3600 > 0:
+                        time_str = f"{time_ago.seconds // 3600}h ago"
+                    else:
+                        time_str = f"{time_ago.seconds // 60}m ago"
+                except Exception:
+                    time_str = "recently"
+
+            # Add timestamp to preview text, then escape once for XSS protection
+            if time_str:
+                preview_text = f"{preview_text}\n\nPosted {time_str}"
+            preview_escaped = html.escape(preview_text)
 
             # Matched filters with vibrant pills (HTML escaped for XSS protection)
             matches_html = ""
@@ -354,25 +465,6 @@ else:
                     matches_html += f'<span class="matched-pill pill-category">🏭 {cat_escaped}</span>'
                 matches_html += "</div>"
 
-            # Timestamp
-            timestamp_html = ""
-            scraped_at = lead.get("scraped_at", "")
-            if scraped_at:
-                try:
-                    dt = datetime.fromisoformat(scraped_at)
-                    time_ago = datetime.now() - dt
-                    if time_ago.days > 0:
-                        time_str = f"{time_ago.days}d ago"
-                    elif time_ago.seconds // 3600 > 0:
-                        time_str = f"{time_ago.seconds // 3600}h ago"
-                    else:
-                        time_str = f"{time_ago.seconds // 60}m ago"
-                    timestamp_html = f'<div class="timestamp">Posted {time_str}</div>'
-                except Exception:
-                    timestamp_html = (
-                        f'<div class="timestamp">Posted at {scraped_at}</div>'
-                    )
-
             # Render as two columns with lead card only wrapping left content
             col1, col2 = st.columns([5, 1])
 
@@ -382,10 +474,13 @@ else:
                     {author_display}
                     <div class="lead-content">{preview_escaped}</div>
                     {matches_html}
-                    {timestamp_html}
                 </div>
                 """
-                st.markdown(full_card_html, unsafe_allow_html=True)
+                try:
+                    st.html(full_card_html)
+                except AttributeError:
+                    # Fallback for older Streamlit versions
+                    st.markdown(full_card_html, unsafe_allow_html=True)
 
             with col2:
                 # Actions with improved styling
@@ -407,9 +502,9 @@ else:
 
 # Footer
 st.markdown("---")
-st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-# Auto-refresh every 30 seconds
-if status["active"]:
-    time.sleep(30)
-    st.rerun()
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+with col2:
+    if st.button("🔄 Refresh", key="manual_refresh"):
+        st.rerun()

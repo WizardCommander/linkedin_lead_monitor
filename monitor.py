@@ -1,9 +1,17 @@
 import json
 import time
+import logging
 import schedule
 from typing import Callable, Optional
 from scraper_linkedin import main as run_linkedin_scraper
 from database import init_database
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 
 class ScraperMonitor:
     """Manages scheduled scraping and monitoring state"""
@@ -13,6 +21,7 @@ class ScraperMonitor:
         self.is_running = False
         self.last_run_status = "Not started"
         self.last_run_time = None
+        self.next_run_time = None
 
     def load_config(self) -> dict:
         """Load configuration from JSON file"""
@@ -32,7 +41,8 @@ class ScraperMonitor:
             "interval_hours": config.get("monitoring", {}).get("interval_hours", 1),
             "is_running": self.is_running,
             "last_run_status": self.last_run_status,
-            "last_run_time": self.last_run_time
+            "last_run_time": self.last_run_time,
+            "next_run_time": self.next_run_time,
         }
 
     def start_monitoring(self):
@@ -42,6 +52,7 @@ class ScraperMonitor:
             config["monitoring"] = {}
         config["monitoring"]["active"] = True
         self.save_config(config)
+        logger.info("✅ Monitoring enabled")
         print("✅ Monitoring enabled")
 
     def stop_monitoring(self):
@@ -51,6 +62,7 @@ class ScraperMonitor:
             config["monitoring"] = {}
         config["monitoring"]["active"] = False
         self.save_config(config)
+        logger.info("⏸️ Monitoring disabled")
         print("⏸️  Monitoring disabled")
 
     def run_scraper_job(self):
@@ -59,6 +71,7 @@ class ScraperMonitor:
 
         # Check if monitoring is still active
         if not config.get("monitoring", {}).get("active", False):
+            logger.info("⏸️ Monitoring is paused, skipping scrape")
             print("⏸️  Monitoring is paused, skipping scrape")
             return
 
@@ -66,20 +79,31 @@ class ScraperMonitor:
         self.last_run_time = time.time()
 
         try:
-            print(f"\n🔄 Running scheduled scrape at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            logger.info(f"🔄 Running scheduled scrape at {timestamp}")
+            print(f"\n🔄 Running scheduled scrape at {timestamp}")
             run_linkedin_scraper()
             self.last_run_status = "success"
+            logger.info("✅ Scheduled scrape completed successfully")
             print("✅ Scheduled scrape completed successfully")
+
+            # Calculate next run time
+            interval_hours = config.get("monitoring", {}).get("interval_hours", 1)
+            self.next_run_time = time.time() + (interval_hours * 3600)
+
         except Exception as e:
             self.last_run_status = f"error: {str(e)}"
+            logger.error(f"❌ Scrape failed: {e}", exc_info=True)
             print(f"❌ Scrape failed: {e}")
         finally:
             self.is_running = False
 
     def run_once(self):
         """Manually trigger scraper (one-time run)"""
+        logger.info("🚀 Manual scrape triggered")
         print("\n🚀 Manual scrape triggered")
         self.run_scraper_job()
+
 
 def start_scheduler(monitor: ScraperMonitor, interval_hours: int = 1):
     """Start the background scheduler"""
@@ -92,6 +116,7 @@ def start_scheduler(monitor: ScraperMonitor, interval_hours: int = 1):
     while True:
         schedule.run_pending()
         time.sleep(60)  # Check every minute
+
 
 if __name__ == "__main__":
     # Initialize database
@@ -107,7 +132,9 @@ if __name__ == "__main__":
     print("🤖 PR Lead Scraper Monitor")
     print("=" * 60)
     print(f"Interval: Every {interval} hour(s)")
-    print(f"Monitoring: {'Active' if config.get('monitoring', {}).get('active') else 'Paused'}")
+    print(
+        f"Monitoring: {'Active' if config.get('monitoring', {}).get('active') else 'Paused'}"
+    )
     print("\nScheduler will run in background...")
     print("Press Ctrl+C to stop\n")
 

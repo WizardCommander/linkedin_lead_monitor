@@ -11,6 +11,7 @@ __pycache__/
 node_modules/
 .vscode/
 linkedin_n8n_scraper.json
+scraper_bluesky.py
 
 # Test files and test databases
 test_*.py
@@ -20,3 +21,6 @@ pytest_cache/
 .pytest_cache/
 .coverage
 htmlcov/
+
+venv/*
+venv
