@@ -1,0 +1,65 @@
+{
+  "keywords": [
+    "\"looking for a PR agency\"",
+    "\"need a PR firm\"",
+    "\"CPG PR agency\"",
+    "\"hiring a PR agency\"",
+    "\"beauty PR agency\"",
+    "\"food and beverage PR\"",
+    "\"DTC brand PR\"",
+    "\"consumer brand PR\"",
+    "\"brand communications help\"",
+    "\"product launch PR\"",
+    "\"just closed our Series A\"",
+    "\"raised funding\"",
+    "\"funding announcement\"",
+    "\"launching our new product\"",
+    "\"product launch\"",
+    "\"brand launch\"",
+    "\"going national\"",
+    "\"expanding to new markets\"",
+    "\"scaling our brand\"",
+    "\"new CMO\"",
+    "\"appointed as CMO\"",
+    "\"crisis management\"",
+    "\"wellness brand PR\"",
+    "\"sustainable brand PR\"",
+    "\"clean beauty PR\""
+  ],
+  "job_titles": [
+    "CMO",
+    "Chief Marketing Officer",
+    "VP Marketing",
+    "Vice President of Marketing",
+    "Brand Manager",
+    "Senior Brand Manager",
+    "Director of Marketing",
+    "Director of Brand Marketing",
+    "Communications Manager",
+    "Head of Communications"
+  ],
+  "industries": [
+    "Beauty",
+    "CPG",
+    "Consumer Packaged Goods",
+    "Food and Beverage",
+    "Skincare",
+    "Cosmetics",
+    "Wellness",
+    "Supplements",
+    "Spirits",
+    "Fashion",
+    "Apparel",
+    "Pet Products"
+  ],
+  "apify": {
+    "results_per_keyword": 10,
+    "date_filter": "past-month",
+    "sort_type": "date_posted",
+    "use_job_title_filter": true
+  },
+  "monitoring": {
+    "active": true,
+    "interval_hours": 4
+  }
+}

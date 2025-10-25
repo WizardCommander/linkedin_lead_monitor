@@ -484,13 +484,25 @@ else:
 
             with col2:
                 # Actions with improved styling
-                if st.button(
-                    "👁️ Preview",
-                    key=f"preview_{lead['id']}",
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    st.write(f"[Open LinkedIn Post]({lead.get('post_url', '#')})")
+                post_url = lead.get('post_url', '')
+                if post_url:
+                    st.link_button(
+                        "👁️ View Post",
+                        url=post_url,
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                # Contact button - opens LinkedIn profile
+                author_handle = lead.get('author_handle', '')
+                if author_handle:
+                    # Construct LinkedIn profile URL
+                    profile_url = f"https://www.linkedin.com/in/{author_handle}/"
+                    st.link_button(
+                        "💬 Contact",
+                        url=profile_url,
+                        use_container_width=True,
+                    )
 
                 if st.button(
                     "🗑️ Dismiss", key=f"dismiss_{lead['id']}", use_container_width=True

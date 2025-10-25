@@ -1,17 +1,30 @@
-config.json
+# Database files
 *.db
-*.pdf
-*.txt
-*.md
 *.sqlite
 *.sqlite3
+
+# Python cache
 __pycache__/
 *.pyc
+
+# Environment variables and secrets
 .env
-node_modules/
+
+# IDE
 .vscode/
+
+# Temporary/build files
+node_modules/
+venv/
+venv/*
+
+# Legacy files
 linkedin_n8n_scraper.json
 scraper_bluesky.py
+config_backup.json
+
+# PDF exports
+*.pdf
 
 # Test files and test databases
 test_*.py
@@ -24,3 +37,9 @@ htmlcov/
 
 venv/*
 venv
+todo.md
+CLAUDE.md
+DEV_SUMMARY.md
+CHANGES.md
+industries.png
+notes.txt
