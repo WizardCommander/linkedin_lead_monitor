@@ -17,6 +17,7 @@ __pycache__/
 node_modules/
 venv/
 venv/*
+*.csv
 
 # Legacy files
 linkedin_n8n_scraper.json
@@ -35,6 +36,9 @@ pytest_cache/
 .coverage
 htmlcov/
 
+# Hypothesis property-based testing
+.hypothesis/
+
 venv/*
 venv
 todo.md
@@ -43,3 +47,6 @@ DEV_SUMMARY.md
 CHANGES.md
 industries.png
 notes.txt
+
+# Claude Code
+.claude/

@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:apify.com)"
+      "WebFetch(domain:apify.com)",
+      "Bash(sqlite3:*)",
+      "WebFetch(domain:hub.phantombuster.com)"
     ],
     "deny": [],
     "ask": []
