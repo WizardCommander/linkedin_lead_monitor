@@ -3,7 +3,7 @@ import time
 import logging
 import schedule
 from typing import Callable, Optional
-from scraper_linkedin import main as run_linkedin_scraper
+from scraper_twitter import main as run_twitter_scraper
 from database import init_database
 
 # Setup logging
@@ -82,7 +82,7 @@ class ScraperMonitor:
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             logger.info(f"🔄 Running scheduled scrape at {timestamp}")
             print(f"\n🔄 Running scheduled scrape at {timestamp}")
-            run_linkedin_scraper()
+            run_twitter_scraper()
             self.last_run_status = "success"
             logger.info("✅ Scheduled scrape completed successfully")
             print("✅ Scheduled scrape completed successfully")

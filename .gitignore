@@ -24,6 +24,17 @@ linkedin_n8n_scraper.json
 scraper_bluesky.py
 config_backup.json
 
+# PhantomBuster/LinkedIn files (archived locally)
+phantombuster_client.py
+phantombuster_parser.py
+scraper_linkedin.py
+generate_search_urls.py
+test_phantombuster.py
+test_phantombuster_integration.py
+test_pb_output.py
+test_fetch_result.py
+test_scraper_filters.py
+
 # PDF exports
 *.pdf
 

@@ -34,7 +34,7 @@ class PhantomBusterClient:
         agent_id: str,
         search_url: str,
         session_cookie: Optional[str] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         Launch a PhantomBuster agent with a LinkedIn search URL
 
@@ -44,10 +44,14 @@ class PhantomBusterClient:
             session_cookie: LinkedIn li_at session cookie. If None, reads from env
 
         Returns:
-            Container ID for polling status
+            Dict with keys:
+                - success: bool - True if launch succeeded
+                - container_id: str - Container ID if launched
+                - message: str - Status message (e.g. "already retrieved")
+                - cached: bool - True if using cached results
 
         Raises:
-            Exception: If agent launch fails
+            Exception: If agent launch fails unexpectedly
         """
         linkedin_cookie = session_cookie or os.getenv("LINKEDIN_SESSION_COOKIE")
         if not linkedin_cookie:
@@ -64,21 +68,47 @@ class PhantomBusterClient:
         }
 
         response = self.session.post(endpoint, json=payload)
+
+        # Handle success case
+        if response.status_code == 200:
+            data = response.json()
+
+            # PhantomBuster API returns: {"status": "success", "data": {"containerId": "..."}}
+            if "data" in data and isinstance(data["data"], dict):
+                container_id = data["data"].get("containerId")
+            else:
+                # Fallback for direct format: {"containerId": "..."}
+                container_id = data.get("containerId")
+
+            if not container_id:
+                raise Exception(f"No container ID in response: {data}")
+
+            return {
+                "success": True,
+                "container_id": container_id,
+                "message": "Agent launched successfully",
+                "cached": False,
+            }
+
+        # Handle "already retrieved" case (PhantomBuster returns success but with message)
+        # This happens when PB has cached results for this search
+        try:
+            data = response.json()
+            message = data.get("message", "")
+
+            if "already retrieved" in message.lower():
+                return {
+                    "success": True,
+                    "container_id": None,
+                    "message": message,
+                    "cached": True,
+                }
+        except:
+            pass
+
+        # For other errors, raise
         response.raise_for_status()
-
-        data = response.json()
-
-        # PhantomBuster API returns: {"status": "success", "data": {"containerId": "..."}}
-        if "data" in data and isinstance(data["data"], dict):
-            container_id = data["data"].get("containerId")
-        else:
-            # Fallback for direct format: {"containerId": "..."}
-            container_id = data.get("containerId")
-
-        if not container_id:
-            raise Exception(f"No container ID in response: {data}")
-
-        return container_id
+        raise Exception(f"Unexpected response from PhantomBuster: {response.text}")
 
     def get_agent_status(self, agent_id: str, container_id: str) -> Dict[str, Any]:
         """
@@ -215,6 +245,95 @@ class PhantomBusterClient:
 
         # Parse the result object JSON string
         import json as json_module
+        if isinstance(result_obj, str):
+            result_obj = json_module.loads(result_obj)
+
+        # Extract JSON URL from result object
+        if not isinstance(result_obj, dict) or "jsonUrl" not in result_obj:
+            raise ValueError(f"No jsonUrl in resultObject: {result_obj}")
+
+        json_url = result_obj["jsonUrl"]
+        print(f"    Fetching scraped data from S3...")
+
+        # Fetch the actual scraped LinkedIn posts from S3
+        s3_response = requests.get(json_url)
+        s3_response.raise_for_status()
+
+        posts = s3_response.json()
+
+        if isinstance(posts, list):
+            return posts
+        else:
+            raise ValueError(
+                f"Unexpected S3 data format: {type(posts).__name__}. "
+                f"Expected list, got: {str(posts)[:200]}"
+            )
+
+    def get_all_containers(self, agent_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Get all containers for an agent (historical execution data)
+
+        Args:
+            agent_id: PhantomBuster agent ID
+            limit: Maximum number of containers to retrieve (default 50)
+
+        Returns:
+            List of container dicts with keys: id, lastEndStatus, endDate, etc.
+            Sorted by most recent first
+        """
+        endpoint = f"{self.BASE_URL}/agent/{agent_id}/containers"
+        response = self.session.get(endpoint)
+        response.raise_for_status()
+
+        data = response.json()
+
+        # PhantomBuster returns: {"status": "success", "data": [containers...]}
+        containers = data.get("data", [])
+
+        # Sort by most recent first (containers with endDate)
+        containers_with_date = [c for c in containers if c.get("endDate")]
+        containers_with_date.sort(key=lambda c: c.get("endDate", ""), reverse=True)
+
+        return containers_with_date[:limit]
+
+    def fetch_output_by_container_id(self, container_id: str) -> List[Dict[str, Any]]:
+        """
+        Fetch scraped data from any container ID (historical or recent)
+
+        This is useful for fetching cached results without needing the agent_id.
+
+        Args:
+            container_id: Container ID to fetch results from
+
+        Returns:
+            List of scraped post data dicts
+
+        Raises:
+            ValueError: If response format is unexpected or no results found
+        """
+        # Get result object which contains S3 URLs
+        endpoint = "https://api.phantombuster.com/api/v2/containers/fetch-result-object"
+
+        print(f"    Fetching result object (container: {container_id})...")
+
+        response = self.session.get(endpoint, params={"id": container_id})
+        response.raise_for_status()
+
+        data = response.json()
+
+        # Response format: {"resultObject": '{"csvURL":"...","jsonUrl":"..."}'}
+        if not isinstance(data, dict) or "resultObject" not in data:
+            raise ValueError(f"No resultObject in response: {data}")
+
+        result_obj = data["resultObject"]
+
+        if not result_obj:
+            print(f"    Warning: resultObject is null (no data scraped)")
+            return []
+
+        # Parse the result object JSON string
+        import json as json_module
+
         if isinstance(result_obj, str):
             result_obj = json_module.loads(result_obj)
 

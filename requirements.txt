@@ -1,6 +1,6 @@
 streamlit==1.29.0
 python-dotenv==1.0.0
-openai>=1.95.0
 requests==2.32.3
 schedule==1.2.0
 hypothesis==6.122.3
+pytest>=8.0.0

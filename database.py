@@ -55,6 +55,11 @@ def init_database():
     except sqlite3.OperationalError:
         pass
 
+    try:
+        cursor.execute("ALTER TABLE leads ADD COLUMN author_username TEXT")
+    except sqlite3.OperationalError:
+        pass
+
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS activity_ids (
@@ -87,6 +92,25 @@ def init_database():
     """
     )
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS processed_containers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            container_id TEXT UNIQUE NOT NULL,
+            agent_id TEXT NOT NULL,
+            keyword TEXT,
+            processed_at TEXT NOT NULL,
+            post_count INTEGER DEFAULT 0
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_container_id ON processed_containers(container_id)
+    """
+    )
+
     conn.commit()
     conn.close()
 
@@ -99,17 +123,18 @@ def save_lead(platform: str, post_id: str, data: Dict) -> bool:
             cursor.execute(
                 """
                 INSERT OR IGNORE INTO leads
-                (platform, post_id, author_name, author_handle, author_title,
+                (platform, post_id, author_name, author_handle, author_username, author_title,
                  company_name, post_content, post_url, budget_mention,
                  created_at, scraped_at, matched_keywords, matched_roles,
                  matched_categories, raw_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     platform,
                     post_id,
                     data.get("author_name"),
                     data.get("author_handle"),
+                    data.get("author_username"),
                     data.get("author_title"),
                     data.get("company_name"),
                     data.get("post_content"),
@@ -240,9 +265,15 @@ def get_leads_filtered(
     keyword: Optional[str] = None,
     search_text: Optional[str] = None,
     include_dismissed: bool = False,
+    date_range_hours: Optional[int] = None,
     limit: Optional[int] = None,
 ) -> List[Dict]:
-    """Get leads with advanced filtering"""
+    """Get leads with advanced filtering
+
+    Args:
+        date_range_hours: If specified, only return leads where created_at (post timestamp)
+                         is within this many hours from now
+    """
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -273,7 +304,14 @@ def get_leads_filtered(
             query += " AND post_content LIKE ?"
             params.append(f"%{search_text}%")
 
-        query += " ORDER BY scraped_at DESC"
+        if date_range_hours:
+            from datetime import timedelta
+
+            cutoff_time = (datetime.now() - timedelta(hours=date_range_hours)).isoformat()
+            query += " AND created_at >= ?"
+            params.append(cutoff_time)
+
+        query += " ORDER BY created_at DESC"
 
         if limit:
             query += " LIMIT ?"
@@ -319,3 +357,64 @@ def get_leads_today_count() -> int:
             (today.isoformat(),),
         )
         return cursor.fetchone()[0]
+
+
+def save_processed_container(
+    container_id: str, agent_id: str, keyword: str = None, post_count: int = 0
+) -> bool:
+    """Save a processed container to track what we've already processed"""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO processed_containers
+                (container_id, agent_id, keyword, processed_at, post_count)
+                VALUES (?, ?, ?, ?, ?)
+            """,
+                (container_id, agent_id, keyword, datetime.now().isoformat(), post_count),
+            )
+            return cursor.rowcount > 0
+    except sqlite3.IntegrityError:
+        return False
+
+
+def is_container_processed(container_id: str) -> bool:
+    """Check if a container has already been processed"""
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM processed_containers
+            WHERE container_id = ?
+        """,
+            (container_id,),
+        )
+        return cursor.fetchone()[0] > 0
+
+
+def get_processed_containers(agent_id: Optional[str] = None) -> List[Dict]:
+    """Get list of processed containers, optionally filtered by agent_id"""
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if agent_id:
+            cursor.execute(
+                """
+                SELECT * FROM processed_containers
+                WHERE agent_id = ?
+                ORDER BY processed_at DESC
+            """,
+                (agent_id,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT * FROM processed_containers
+                ORDER BY processed_at DESC
+            """
+            )
+
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]

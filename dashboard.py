@@ -298,7 +298,7 @@ with col2:
     st.metric("Today", today_leads)
 
 with col3:
-    platform_badge = "LinkedIn"
+    platform_badge = "Twitter"
     st.metric("Platform", platform_badge)
 
 with col4:
@@ -356,7 +356,7 @@ with col3:
 st.header("📋 Recent Leads")
 
 # Filters
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     filter_category = st.selectbox(
@@ -374,10 +374,17 @@ with col3:
     )
 
 with col4:
+    date_range = st.selectbox(
+        "⏰ Date Range",
+        ["All Time", "Last 4 hours", "Last 24 hours", "Last Week", "Last Month"],
+        key="date_range",
+    )
+
+with col5:
     search_text = st.text_input("🔍 Search posts", key="search_text")
 
 # Get filtered leads
-filter_params = {"platform": "linkedin", "include_dismissed": False, "limit": 50}
+filter_params = {"platform": "twitter", "include_dismissed": False, "limit": 50}
 
 if filter_category and filter_category != "All":
     filter_params["category"] = filter_category
@@ -387,6 +394,16 @@ if filter_role and filter_role != "All":
 
 if filter_keyword and filter_keyword != "All":
     filter_params["keyword"] = filter_keyword
+
+# Convert date range to hours
+if date_range and date_range != "All Time":
+    date_range_map = {
+        "Last 4 hours": 4,
+        "Last 24 hours": 24,
+        "Last Week": 24 * 7,
+        "Last Month": 24 * 30,
+    }
+    filter_params["date_range_hours"] = date_range_map.get(date_range)
 
 if search_text:
     filter_params["search_text"] = search_text
@@ -409,13 +426,13 @@ else:
         with st.container():
             # Build entire lead card as HTML
             author_name = html.escape(lead.get("author_name") or "Unknown")
-            author_title_raw = lead.get("author_title") or ""
-            author_title = html.escape(author_title_raw.strip())
+            author_username_raw = lead.get("author_username") or ""
+            author_username = html.escape(author_username_raw.strip())
 
-            if author_title:
-                author_display = f'<div class="lead-header">{author_name}</div><div class="lead-meta">{author_title}</div>'
+            if author_username:
+                author_display = f'<div class="lead-header">{author_name}</div><div class="lead-meta">{author_username}</div>'
             else:
-                author_display = f'<div class="lead-header">{author_name}</div><div class="lead-meta">No title available</div>'
+                author_display = f'<div class="lead-header">{author_name}</div>'
 
             # Post content preview
             content = lead.get("post_content") or ""
@@ -427,12 +444,12 @@ else:
                 else content_clean
             )
 
-            # Timestamp - calculate time ago
+            # Timestamp - calculate time ago using created_at (post timestamp)
             time_str = ""
-            scraped_at = lead.get("scraped_at", "")
-            if scraped_at:
+            created_at = lead.get("created_at", "") or lead.get("scraped_at", "")
+            if created_at:
                 try:
-                    dt = datetime.fromisoformat(scraped_at)
+                    dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                     time_ago = datetime.now() - dt
                     if time_ago.days > 0:
                         time_str = f"{time_ago.days}d ago"
@@ -443,9 +460,25 @@ else:
                 except Exception:
                     time_str = "recently"
 
-            # Add timestamp to preview text, then escape once for XSS protection
-            if time_str:
-                preview_text = f"{preview_text}\n\nPosted {time_str}"
+            # Extract budget from raw_data if available
+            budget_str = ""
+            budget_mention = lead.get("budget_mention")
+            if not budget_mention and lead.get("raw_data"):
+                try:
+                    raw_data = json.loads(lead["raw_data"])
+                    budget_mentions = raw_data.get("budget_mentions", [])
+                    if budget_mentions:
+                        budget_str = f" • 💰 {budget_mentions[0]}"
+                except Exception:
+                    pass
+            elif budget_mention:
+                budget_str = f" • 💰 {budget_mention}"
+
+            # Add timestamp and budget to preview text, then escape once for XSS protection
+            footer_text = ""
+            if time_str or budget_str:
+                footer_text = f"\n\nPosted {time_str}{budget_str}" if time_str else f"\n\n{budget_str}"
+            preview_text = f"{preview_text}{footer_text}"
             preview_escaped = html.escape(preview_text)
 
             # Matched filters with vibrant pills (HTML escaped for XSS protection)
@@ -493,11 +526,12 @@ else:
                         use_container_width=True,
                     )
 
-                # Contact button - opens LinkedIn profile
-                author_handle = lead.get('author_handle', '')
-                if author_handle:
-                    # Construct LinkedIn profile URL
-                    profile_url = f"https://www.linkedin.com/in/{author_handle}/"
+                # Contact button - opens Twitter profile
+                author_username = lead.get('author_username', '')
+                if author_username:
+                    # Construct Twitter profile URL (remove @ if present)
+                    username_clean = author_username.lstrip('@')
+                    profile_url = f"https://twitter.com/{username_clean}"
                     st.link_button(
                         "💬 Contact",
                         url=profile_url,

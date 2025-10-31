@@ -11,6 +11,9 @@ from database import (
     save_lead,
     save_activity_id,
     mark_activity_scraped,
+    save_processed_container,
+    is_container_processed,
+    get_processed_containers,
 )
 from utils import extract_budget_mention
 from phantombuster_client import PhantomBusterClient
@@ -133,14 +136,63 @@ def load_config():
     return config
 
 
-def get_phantombuster_linkedin_posts(config: Dict) -> List[Dict]:
+def filter_posts_by_date(posts: List[Dict], hours: int) -> List[Dict]:
+    """Filter posts to only include those posted within the last N hours
+
+    Args:
+        posts: List of post dicts with 'timestamp' or 'created_at' field
+        hours: Number of hours to look back from now
+
+    Returns:
+        Filtered list of posts within the time range
+    """
+    from datetime import datetime, timedelta
+
+    if not hours or hours <= 0:
+        # No filtering, return all posts
+        return posts
+
+    cutoff_time = datetime.now() - timedelta(hours=hours)
+    filtered_posts = []
+
+    for post in posts:
+        # Try multiple timestamp field names
+        timestamp_str = post.get("timestamp") or post.get("created_at") or post.get("posted_at")
+
+        if not timestamp_str:
+            # No timestamp, skip this post
+            logger.warning(f"Post missing timestamp: {post.get('activity_id', 'unknown')}")
+            continue
+
+        try:
+            # Parse ISO format timestamp
+            post_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+
+            # Check if within range
+            if post_time >= cutoff_time:
+                filtered_posts.append(post)
+
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"Invalid timestamp format: {timestamp_str}")
+            continue
+
+    logger.info(f"Date filter: {len(posts)} posts -> {len(filtered_posts)} posts within last {hours}h")
+    return filtered_posts
+
+
+def get_phantombuster_linkedin_posts(config: Dict, date_range_hours: Optional[int] = None) -> List[Dict]:
     """Get LinkedIn posts data using PhantomBuster API
 
-    Uses PhantomBuster's LinkedIn Search Export to scrape posts.
-    Returns complete post data including content, author info, etc.
+    Supports two modes:
+    1. Fresh scrape: Launches agent for new keyword searches
+    2. Historical fetch: Retrieves cached results from previous scrapes
+
+    When PhantomBuster returns "already retrieved", fetches from existing
+    containers instead of failing.
 
     Args:
         config: Configuration dictionary with PhantomBuster settings
+        date_range_hours: If specified, only return posts within this many hours from now
 
     Returns:
         List of post data dictionaries with URLs, content, author info, etc.
@@ -166,6 +218,8 @@ def get_phantombuster_linkedin_posts(config: Dict) -> List[Dict]:
     print(f"Searching LinkedIn via PhantomBuster...")
     print(f"  Agent ID: {agent_id}")
     print(f"  Keywords: {len(keywords)}")
+    if date_range_hours:
+        print(f"  Date filter: Last {date_range_hours} hours")
 
     try:
         # Initialize PhantomBuster client
@@ -177,24 +231,73 @@ def get_phantombuster_linkedin_posts(config: Dict) -> List[Dict]:
         for i, keyword in enumerate(keywords):
             print(f"\n  [{i+1}/{len(keywords)}] Searching: '{keyword}'")
 
-            # Launch agent with keyword (agent is in Keywords mode)
+            # Try to launch agent with keyword (agent is in Keywords mode)
             print(f"    Launching agent...")
-            container_id = client.launch_agent(agent_id, keyword)
-            print(f"    Container ID: {container_id}")
+            launch_result = client.launch_agent(agent_id, keyword)
 
-            # Wait for completion
-            poll_interval = pb_config.get("poll_interval", 30)
-            timeout = pb_config.get("timeout", 380)
+            # Handle two modes: fresh scrape or cached results
+            if launch_result["cached"]:
+                # PhantomBuster says "already retrieved" - fetch from historical containers
+                print(f"    ⚠️  {launch_result['message']}")
+                print(f"    Fetching from historical containers...")
 
-            print(f"    Waiting for agent to complete (timeout: {timeout}s)...")
-            status = client.wait_for_completion(
-                agent_id, container_id, poll_interval=poll_interval, timeout=timeout
-            )
-            print(f"    Agent completed successfully")
+                # Get all containers for this agent
+                containers = client.get_all_containers(agent_id, limit=10)
 
-            # Fetch output
-            print(f"    Fetching results...")
-            raw_output = client.fetch_output(agent_id, container_id)
+                if not containers:
+                    print(f"    No historical containers found")
+                    continue
+
+                # Use the most recent unprocessed container
+                # (or most recent overall if all are processed)
+                container_to_fetch = None
+                for container in containers:
+                    container_id = str(container.get("id"))
+                    if not is_container_processed(container_id):
+                        container_to_fetch = container
+                        break
+
+                # If all containers are processed, use the most recent one anyway
+                # (user might have changed date_range_hours filter)
+                if not container_to_fetch and containers:
+                    container_to_fetch = containers[0]
+
+                if not container_to_fetch:
+                    print(f"    No suitable container found")
+                    continue
+
+                container_id = str(container_to_fetch.get("id"))
+                print(f"    Using container: {container_id}")
+
+                # Fetch output from this container
+                print(f"    Fetching results...")
+                raw_output = client.fetch_output_by_container_id(container_id)
+
+                # Save this container as processed
+                save_processed_container(container_id, agent_id, keyword, len(raw_output) if isinstance(raw_output, list) else 0)
+
+            else:
+                # Fresh scrape - agent launched successfully
+                container_id = launch_result["container_id"]
+                print(f"    Container ID: {container_id}")
+
+                # Wait for completion
+                poll_interval = pb_config.get("poll_interval", 30)
+                timeout = pb_config.get("timeout", 900)
+
+                print(f"    Waiting for agent to complete (timeout: {timeout}s)...")
+                status = client.wait_for_completion(
+                    agent_id, container_id, poll_interval=poll_interval, timeout=timeout
+                )
+                print(f"    Agent completed successfully")
+
+                # Fetch output
+                print(f"    Fetching results...")
+                raw_output = client.fetch_output(agent_id, container_id)
+
+                # Save this container as processed
+                save_processed_container(container_id, agent_id, keyword, len(raw_output) if isinstance(raw_output, list) else 0)
+
             print(f"    Raw output type: {type(raw_output)}, length: {len(raw_output) if isinstance(raw_output, list) else 'N/A'}")
 
             # Debug: show first item structure
@@ -225,9 +328,15 @@ def get_phantombuster_linkedin_posts(config: Dict) -> List[Dict]:
                 # If no activity_id, keep it anyway
                 unique_posts.append(post)
 
+        # Apply date filtering if specified
+        if date_range_hours:
+            unique_posts = filter_posts_by_date(unique_posts, date_range_hours)
+
         print(f"\nPhantomBuster search complete:")
         print(f"  Total posts fetched: {len(all_posts)}")
-        print(f"  Unique posts: {len(unique_posts)}")
+        print(f"  Unique posts (after dedup): {len(unique_posts)}")
+        if date_range_hours:
+            print(f"  After date filter ({date_range_hours}h): {len(unique_posts)}")
 
         return unique_posts
 
@@ -237,16 +346,17 @@ def get_phantombuster_linkedin_posts(config: Dict) -> List[Dict]:
         raise
 
 
-def get_linkedin_posts(config: Dict) -> List[Dict]:
+def get_linkedin_posts(config: Dict, date_range_hours: Optional[int] = None) -> List[Dict]:
     """Get LinkedIn posts using PhantomBuster
 
     Args:
         config: Configuration dictionary
+        date_range_hours: If specified, only return posts within this many hours from now
 
     Returns:
         List of post data dictionaries
     """
-    return get_phantombuster_linkedin_posts(config)
+    return get_phantombuster_linkedin_posts(config, date_range_hours)
 
 
 def extract_activity_id(url: str) -> Optional[str]:
@@ -1167,8 +1277,11 @@ def main():
         print(f"Configuration Error: {e}")
         return
 
+    # Get date range filter from config (optional)
+    date_range_hours = config.get("monitoring", {}).get("date_range_hours")
+
     # Get LinkedIn posts data (routes to PhantomBuster or Apify based on config)
-    posts = get_linkedin_posts(config)
+    posts = get_linkedin_posts(config, date_range_hours=date_range_hours)
 
     if not posts:
         print(
